@@ -1,7 +1,6 @@
 import { APIGatewayProxyHandlerV2 } from "aws-lambda";
-
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, GetCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, GetCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 
 const ddbDocClient = createDDbDocClient();
 
@@ -21,12 +20,14 @@ export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {    
       };
     }
 
+    // 获取电影元数据
     const commandOutput = await ddbDocClient.send(
       new GetCommand({
         TableName: process.env.TABLE_NAME,
         Key: { id: movieId },
       })
     );
+
     console.log("GetCommand response: ", commandOutput);
     if (!commandOutput.Item) {
       return {
@@ -37,9 +38,25 @@ export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {    
         body: JSON.stringify({ Message: "Invalid movie Id" }),
       };
     }
-    const body = {
-      data: commandOutput.Item,
+
+    let response: { movie: Record<string, any>; cast?: Record<string, any>[] } = { 
+      movie: commandOutput.Item 
     };
+
+    // 检查是否需要查询演员信息（?cast=true）
+    const castQuery = event.queryStringParameters?.cast;
+    if (castQuery === "true") {
+      const castCommand = new QueryCommand({
+        TableName: process.env.CAST_TABLE_NAME, // 电影演员信息的表
+        KeyConditionExpression: "movieId = :m",
+        ExpressionAttributeValues: {
+          ":m": movieId,
+        },
+      });
+
+      const castData = await ddbDocClient.send(castCommand);
+      response.cast = castData.Items || []; // 添加演员信息
+    }
 
     // Return Response
     return {
@@ -47,7 +64,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event, context) => {    
       headers: {
         "content-type": "application/json",
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(response),
     };
   } catch (error: any) {
     console.log(JSON.stringify(error));
